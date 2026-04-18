@@ -1,4 +1,5 @@
 -- lua/rainbow-fast/init.lua
+
 local M = {}
 
 local api = vim.api
@@ -14,17 +15,62 @@ local win_timers  = {}   -- [winid] -> uv timer
 
 M.config = {
   colors = {
-    "#E07A96",  -- red      (slightly darker pastel)
     "#FFAB76",  -- peach
+    "#E07A96",  -- red      (slightly darker pastel)
     "#85AEFF",  -- blue
     "#C77DFF",  -- purple
-    "#E8873A",  -- orange
   },
   debounce_ms = 80,
   lookahead   = 10,
-  excluded_filetypes = {
-    "help", "alpha", "dashboard", "neo-tree", "NvimTree",
-    "Trouble", "lazy", "mason", "notify", "TelescopePrompt",
+
+  -- Whitelist of filetypes where rainbow brackets are enabled.
+  -- Only these will be highlighted; everything else is ignored.
+  filetypes = {
+    -- Web
+    "html", "css", "scss", "sass", "less",
+    "javascript", "javascriptreact", "typescript", "typescriptreact",
+    "vue", "svelte", "astro", "htmx",
+    -- Systems
+    "c", "cpp", "objc", "objcpp", "cuda",
+    "rust", "go", "zig", "d", "nim",
+    -- JVM
+    "java", "kotlin", "scala", "groovy", "clojure",
+    -- Scripting
+    "python", "ruby", "perl", "lua", "php",
+    "bash", "sh", "zsh", "fish", "tcl",
+    -- Functional
+    "haskell", "elm", "elixir", "erlang", "ocaml",
+    "fsharp", "purescript", "gleam", "racket", "scheme", "lisp",
+    -- Data / config
+    "json", "jsonc", "json5", "yaml", "toml", "xml",
+    "graphql", "proto", "thrift", "avro",
+    -- Query / DB
+    "sql", "mysql", "plsql", "sqlite",
+    -- Shell / infra
+    "dockerfile", "terraform", "hcl", "nix",
+    "puppet", "ansible",
+    -- Scientific
+    "r", "julia", "matlab", "octave", "fortran",
+    -- Mobile
+    "swift", "dart",
+    -- .NET
+    "cs", "vb",
+    -- Other popular
+    "zig", "odin", "v", "crystal", "hack",
+    "pony", "chapel", "cobol", "ada",
+    "pascal", "delphi",
+    -- Templating
+    "jinja", "jinja2", "twig", "liquid", "mustache", "handlebars",
+    -- Markup with logic
+    "mdx", "rst",
+    -- Config-adjacent
+    "ini", "cmake", "make", "meson",
+    -- Misc langs people actually use
+    "vim", "viml", "fennel", "janet", "hy",
+    "coffeescript", "livescript",
+    "solidity", "vyper",
+    "latex", "tex",
+    "nasm", "asm",
   },
 }
 
@@ -177,6 +223,9 @@ local function render_ts(bufnr, top, bot)
   return true
 end
 
+-- Fast O(1) filetype lookup built from config.filetypes on setup()
+local ft_enabled = {}
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Main render entry-point
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -185,10 +234,7 @@ local function render(winid, bufnr)
   if not api.nvim_win_is_valid(winid) then return end
   if not api.nvim_buf_is_valid(bufnr)  then return end
 
-  local ft = vim.bo[bufnr].filetype
-  for _, ex in ipairs(M.config.excluded_filetypes) do
-    if ft == ex then return end
-  end
+  if not ft_enabled[vim.bo[bufnr].filetype] then return end
 
   local la  = M.config.lookahead
   local top = math.max(0, vim.fn.line("w0", winid) - 1 - la)
@@ -246,6 +292,13 @@ end
 
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
+
+  -- Build O(1) lookup set from whitelist.
+  ft_enabled = {}
+  for _, ft in ipairs(M.config.filetypes) do
+    ft_enabled[ft] = true
+  end
+
   setup_hl()
 
   local aug = api.nvim_create_augroup("RainbowFast", { clear = true })
@@ -292,6 +345,7 @@ function M.setup(opts)
 end
 
 return M
+
 
 
 
