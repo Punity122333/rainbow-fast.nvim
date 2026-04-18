@@ -15,10 +15,11 @@ local win_timers  = {}   -- [winid] -> uv timer
 
 M.config = {
   colors = {
-    "#FFAB76",  -- peach
     "#E07A96",  -- red      (slightly darker pastel)
+    "#FFAB76",  -- peach
     "#85AEFF",  -- blue
     "#C77DFF",  -- purple
+    "#E8873A",  -- orange
   },
   debounce_ms = 80,
   lookahead   = 10,
@@ -172,6 +173,32 @@ end
 
 local OPEN_TYPES = { ["("] = true, ["["] = true, ["{"] = true }
 
+-- Node types that count as "string-like" containers.
+-- Brackets inside any of these are skipped.
+local STRING_CONTAINERS = {
+  string          = true,
+  string_content  = true,
+  template_string = true,
+  raw_string      = true,
+  interpreted_string_literal = true,  -- Go
+  char_literal    = true,
+  comment         = true,
+  line_comment    = true,
+  block_comment   = true,
+  doc_comment     = true,
+}
+
+-- Walk up the ancestor chain; return true if the node lives inside a string
+-- or comment. Stops at the root so it's O(depth) — typically 5–15 hops.
+local function in_string(node)
+  local p = node:parent()
+  while p do
+    if STRING_CONTAINERS[p:type()] then return true end
+    p = p:parent()
+  end
+  return false
+end
+
 local function render_ts(bufnr, top, bot)
   local ok_p, parser = pcall(vim.treesitter.get_parser, bufnr)
   if not ok_p or not parser then return false end
@@ -193,6 +220,9 @@ local function render_ts(bufnr, top, bot)
     local typ    = node:type()
     n_caps       = n_caps + 1
 
+    -- Skip brackets that live inside strings or comments.
+    if in_string(node) then goto continue end
+
     if OPEN_TYPES[typ] then
       depth = depth + 1
       if sr >= top then
@@ -206,6 +236,8 @@ local function render_ts(bufnr, top, bot)
         depth = depth - 1
       end
     end
+
+    ::continue::
   end
 
   -- Zero captures = grammar doesn't surface bracket nodes; use raw fallback.
@@ -345,6 +377,7 @@ function M.setup(opts)
 end
 
 return M
+
 
 
 
