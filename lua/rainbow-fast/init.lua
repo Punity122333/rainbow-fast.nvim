@@ -186,6 +186,34 @@ local STRING_CONTAINERS = {
   line_comment    = true,
   block_comment   = true,
   doc_comment     = true,
+  String          = true,
+  String_content  = true,
+  Template_string = true,
+  Raw_string      = true,
+  Interpreted_string_literal = true,  -- Go
+  Char_literal    = true,
+  Comment         = true,
+  Line_comment    = true,
+  Block_comment   = true,
+  Doc_comment     = true,
+  STRING          = true,
+  STRING_CONTENT  = true,
+  TEMPLATE_STRING = true,
+  RAW_STRING      = true,
+  INTERPRETED_STRING_LITERAL = true,  -- Go
+  CHAR_LITERAL    = true,
+  COMMENT         = true,
+  LINE_COMMENT    = true,
+  BLOCK_COMMENT   = true,
+  DOC_COMMENT     = true,
+  String_Content  = true,
+  Template_String = true,
+  Raw_String      = true,
+  Interpreted_String_Literal = true,  -- Go
+  Char_Literal    = true,
+  Line_Comment    = true,
+  Block_Comment   = true,
+  Doc_Comment     = true,
 }
 
 -- Walk up the ancestor chain; return true if the node lives inside a string
