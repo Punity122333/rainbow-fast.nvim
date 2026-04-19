@@ -25,9 +25,9 @@ M.config = {
 	},
 	debounce_ms = 80,
 	lookahead = 10,
+	enable_keywords = true, -- Toggleable keyword highlighting
 
 	-- Whitelist of filetypes where rainbow brackets are enabled.
-	-- Only these will be highlighted; everything else is ignored.
 	filetypes = {
 		-- Web
 		"html",
@@ -161,11 +161,6 @@ M.config = {
 		"asm",
 	},
 
-	-- Per-language keyword highlighting.
-	-- Each entry needs:
-	--   query  : treesitter query string capturing keyword tokens as @kw
-	--   blocks : set of TS node types that count as one level of nesting depth
-	-- Add entries here to enable keyword highlighting for other languages.
 	keyword_langs = {
 		lua = {
 			query = [[
@@ -204,8 +199,6 @@ M.config = {
 -- ─────────────────────────────────────────────────────────────────────────────
 
 local function setup_hl()
-	-- Clear up to 10 groups first so stale colours from a previous load
-	-- (e.g. old RainbowFast3 = green) don't bleed through.
 	for i = 1, 10 do
 		pcall(api.nvim_set_hl, 0, "RainbowFast" .. i, {})
 	end
@@ -247,11 +240,11 @@ local function get_query(lang)
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Raw Lua fallback (always works, no string/comment awareness)
+-- Raw Lua fallback
 -- ─────────────────────────────────────────────────────────────────────────────
 
-local OPEN_BYTES = { [40] = true, [91] = true, [123] = true } -- ( [ {
-local CLOSE_BYTES = { [41] = true, [93] = true, [125] = true } -- ) ] }
+local OPEN_BYTES = { [40] = true, [91] = true, [123] = true }
+local CLOSE_BYTES = { [41] = true, [93] = true, [125] = true }
 
 local function render_raw(bufnr, top, bot)
 	local ok, lines = pcall(api.nvim_buf_get_lines, bufnr, 0, bot, false)
@@ -301,10 +294,6 @@ end
 
 local OPEN_TYPES = { ["("] = true, ["["] = true, ["{"] = true }
 
--- ─────────────────────────────────────────────────────────────────────────────
--- Keyword highlighting (per-language, AST-depth coloured)
--- ─────────────────────────────────────────────────────────────────────────────
-
 local function get_kw_query(lang)
 	local cached = kw_cache[lang]
 	if cached ~= nil then
@@ -322,8 +311,6 @@ local function get_kw_query(lang)
 	return kw_cache[lang]
 end
 
--- Count how many block-container ancestors a node has.
--- This gives the nesting depth for keyword colouring.
 local function kw_depth(node, blocks)
 	local depth = 0
 	local p = node:parent()
@@ -361,7 +348,6 @@ local function render_keywords(bufnr, parser, top, bot)
 		local er, ec = node:end_()
 		if sr >= top and sr < bot then
 			local d = kw_depth(node, blocks)
-			-- depth 0 = top-level, still colour it (as depth 1 so it's not invisible)
 			marks[#marks + 1] = { sr, sc, er, ec, hl(math.max(1, d)) }
 		end
 	end
@@ -372,20 +358,18 @@ local function render_keywords(bufnr, parser, top, bot)
 			end_row = m[3],
 			end_col = m[4],
 			hl_group = m[5],
-			priority = 190, -- just below bracket priority so brackets win on overlap
+			priority = 190,
 			strict = false,
 		})
 	end
 end
 
--- Node types that count as "string-like" containers.
--- Brackets inside any of these are skipped.
 local STRING_CONTAINERS = {
 	string = true,
 	string_content = true,
 	template_string = true,
 	raw_string = true,
-	interpreted_string_literal = true, -- Go
+	interpreted_string_literal = true,
 	char_literal = true,
 	comment = true,
 	line_comment = true,
@@ -393,8 +377,6 @@ local STRING_CONTAINERS = {
 	doc_comment = true,
 }
 
--- Walk up the ancestor chain; return true if the node lives inside a string
--- or comment. Stops at the root so it's O(depth) — typically 5–15 hops.
 local function in_string(node)
 	local p = node:parent()
 	while p do
@@ -435,7 +417,6 @@ local function render_ts(bufnr, top, bot)
 		local typ = node:type()
 		n_caps = n_caps + 1
 
-		-- Skip brackets that live inside strings or comments.
 		if in_string(node) then
 			goto continue
 		end
@@ -457,7 +438,6 @@ local function render_ts(bufnr, top, bot)
 		::continue::
 	end
 
-	-- Zero captures = grammar doesn't surface bracket nodes; use raw fallback.
 	if n_caps == 0 then
 		return false
 	end
@@ -474,7 +454,6 @@ local function render_ts(bufnr, top, bot)
 	return true
 end
 
--- Fast O(1) filetype lookup built from config.filetypes on setup()
 local ft_enabled = {}
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -488,7 +467,6 @@ local function render(winid, bufnr)
 	if not api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
 	if not ft_enabled[vim.bo[bufnr].filetype] then
 		return
 	end
@@ -502,10 +480,15 @@ local function render(winid, bufnr)
 		pcall(render_raw, bufnr, top, bot)
 	end
 
-	-- Keyword highlighting (only possible with TS).
-	local ok_p, parser = pcall(vim.treesitter.get_parser, bufnr)
-	if ok_p and parser then
-		pcall(render_keywords, bufnr, parser, top, bot)
+	-- Keyword highlighting logic
+	if M._keywords_enabled then
+		local ok_p, parser = pcall(vim.treesitter.get_parser, bufnr)
+		if ok_p and parser then
+			pcall(render_keywords, bufnr, parser, top, bot)
+		end
+	else
+		-- Clear keyword namespace in viewport if it's disabled
+		api.nvim_buf_clear_namespace(bufnr, ns_kw, top, bot)
 	end
 end
 
@@ -564,10 +547,27 @@ function M.toggle()
 	end
 end
 
+M._keywords_enabled = true
+function M.toggle_keywords()
+	M._keywords_enabled = not M._keywords_enabled
+	if M._keywords_enabled then
+		M.refresh()
+	else
+		-- Just clear the keyword namespace globally when turned off
+		for _, b in ipairs(api.nvim_list_bufs()) do
+			if api.nvim_buf_is_valid(b) then
+				api.nvim_buf_clear_namespace(b, ns_kw, 0, -1)
+			end
+		end
+	end
+end
+
 function M.setup(opts)
 	M.config = vim.tbl_deep_extend("force", M.config, opts or {})
 
-	-- Build O(1) lookup set from whitelist.
+	-- Initialize keyword state based on config
+	M._keywords_enabled = M.config.enable_keywords
+
 	ft_enabled = {}
 	for _, ft in ipairs(M.config.filetypes) do
 		ft_enabled[ft] = true
@@ -582,7 +582,6 @@ function M.setup(opts)
 		callback = setup_hl,
 	})
 
-	-- Immediate render on these events.
 	api.nvim_create_autocmd({ "BufEnter", "BufRead", "BufWinEnter", "BufNewFile", "FileType", "InsertLeave" }, {
 		group = aug,
 		callback = function()
@@ -597,7 +596,6 @@ function M.setup(opts)
 		end,
 	})
 
-	-- Debounced render for high-frequency events.
 	api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "WinScrolled", "WinResized" }, {
 		group = aug,
 		callback = function()
@@ -610,10 +608,6 @@ function M.setup(opts)
 		end,
 	})
 
-	-- Render all windows that are already open when setup() is called.
-	-- lazy.nvim loads plugins after buffers open, so vim.schedule alone (which
-	-- only renders the current window at that tick) misses splits and the case
-	-- where the plugin loads after BufRead has already fired.
 	vim.schedule(function()
 		for _, winid in ipairs(api.nvim_list_wins()) do
 			if api.nvim_win_is_valid(winid) then
