@@ -23,8 +23,10 @@ M.config = {
     "#C77DFF",  -- purple
     "#E8873A",  -- orange
   },
-  debounce_ms = 40,
-  lookahead   = 10,
+  debounce_ms       = 40,
+  lookahead         = 10,
+  brackets_enabled  = true,   -- enable bracket rainbow highlighting
+  keywords_enabled  = true,   -- enable keyword depth highlighting
 
   -- Whitelist of filetypes where rainbow brackets are enabled.
   -- Only these will be highlighted; everything else is ignored.
@@ -635,7 +637,7 @@ local function render(winid, bufnr)
   local top = math.max(0, vim.fn.line("w0", winid) - 1 - la)
   local bot = vim.fn.line("w$", winid) + la
 
-  if M._enabled then
+  if M.config.brackets_enabled then
     local ok, used_ts = pcall(render_ts, bufnr, top, bot)
     if not ok or not used_ts then
       pcall(render_raw, bufnr, top, bot)
@@ -643,7 +645,7 @@ local function render(winid, bufnr)
   end
 
   -- Keyword highlighting (only possible with TS).
-  if M._kw_enabled then
+  if M.config.keywords_enabled then
     local ok_p, parser = pcall(vim.treesitter.get_parser, bufnr)
     if ok_p and parser then
       pcall(render_keywords, bufnr, parser, top, bot)
@@ -703,29 +705,28 @@ function M.clear()
   clear_keywords()
 end
 
--- Toggle everything on/off.
-M._enabled    = true
-M._kw_enabled = true
-
+--- Toggle all highlighting on/off.
 function M.toggle()
-  M._enabled = not M._enabled
-  if M._enabled then M.refresh() else M.clear() end
+  local on = not (M.config.brackets_enabled or M.config.keywords_enabled)
+  M.config.brackets_enabled = on
+  M.config.keywords_enabled = on
+  if on then M.refresh() else M.clear() end
 end
 
--- Toggle only bracket highlighting.
+--- Toggle only bracket highlighting.
 function M.toggle_brackets()
-  M._enabled = not M._enabled
-  if M._enabled then
+  M.config.brackets_enabled = not M.config.brackets_enabled
+  if M.config.brackets_enabled then
     M.refresh()
   else
     clear_brackets()
   end
 end
 
--- Toggle only keyword highlighting.
+--- Toggle only keyword highlighting.
 function M.toggle_keywords()
-  M._kw_enabled = not M._kw_enabled
-  if M._kw_enabled then
+  M.config.keywords_enabled = not M.config.keywords_enabled
+  if M.config.keywords_enabled then
     M.refresh()
   else
     clear_keywords()
@@ -754,7 +755,7 @@ function M.setup(opts)
   api.nvim_create_autocmd({ "BufEnter", "BufRead", "BufWinEnter", "BufNewFile", "FileType", "InsertLeave" }, {
     group = aug,
     callback = function()
-      if not M._enabled then return end
+      if not (M.config.brackets_enabled or M.config.keywords_enabled) then return end
       local winid = api.nvim_get_current_win()
       local bufnr = api.nvim_win_get_buf(winid)
       vim.schedule(function() render(winid, bufnr) end)
@@ -765,7 +766,7 @@ function M.setup(opts)
   api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "WinScrolled", "WinResized" }, {
     group = aug,
     callback = function()
-      if not M._enabled then return end
+      if not (M.config.brackets_enabled or M.config.keywords_enabled) then return end
       local winid = api.nvim_get_current_win()
       local bufnr = api.nvim_win_get_buf(winid)
       schedule(winid, bufnr, M.config.debounce_ms)
@@ -787,5 +788,4 @@ function M.setup(opts)
 end
 
 return M
-
 
