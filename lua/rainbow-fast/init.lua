@@ -6,7 +6,9 @@ local api = vim.api
 local uv = vim.uv or vim.loop
 
 local ns = api.nvim_create_namespace("rainbow_fast")
-local query_cache = {} -- [lang] -> ts query | false
+local ns_kw = api.nvim_create_namespace("rainbow_fast_kw")
+local query_cache = {} -- [lang] -> ts bracket query | false
+local kw_cache = {} -- [lang] -> ts keyword query | false
 local win_timers = {} -- [winid] -> uv timer
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -158,6 +160,43 @@ M.config = {
 		"nasm",
 		"asm",
 	},
+
+	-- Per-language keyword highlighting.
+	-- Each entry needs:
+	--   query  : treesitter query string capturing keyword tokens as @kw
+	--   blocks : set of TS node types that count as one level of nesting depth
+	-- Add entries here to enable keyword highlighting for other languages.
+	keyword_langs = {
+		lua = {
+			query = [[
+        "if"       @kw
+        "elseif"   @kw
+        "else"     @kw
+        "then"     @kw
+        "end"      @kw
+        "for"      @kw
+        "do"       @kw
+        "while"    @kw
+        "repeat"   @kw
+        "until"    @kw
+        "function" @kw
+        "return"   @kw
+        "local"    @kw
+        "in"       @kw
+      ]],
+			blocks = {
+				if_statement = true,
+				for_statement = true,
+				while_statement = true,
+				repeat_statement = true,
+				do_statement = true,
+				function_definition = true,
+				function_declaration = true,
+				local_function = true,
+				method_index_expression = true,
+			},
+		},
+	},
 }
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -262,6 +301,83 @@ end
 
 local OPEN_TYPES = { ["("] = true, ["["] = true, ["{"] = true }
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Keyword highlighting (per-language, AST-depth coloured)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+local function get_kw_query(lang)
+	local cached = kw_cache[lang]
+	if cached ~= nil then
+		return cached
+	end
+
+	local cfg = M.config.keyword_langs[lang]
+	if not cfg then
+		kw_cache[lang] = false
+		return false
+	end
+
+	local ok, q = pcall(vim.treesitter.query.parse, lang, cfg.query)
+	kw_cache[lang] = ok and q or false
+	return kw_cache[lang]
+end
+
+-- Count how many block-container ancestors a node has.
+-- This gives the nesting depth for keyword colouring.
+local function kw_depth(node, blocks)
+	local depth = 0
+	local p = node:parent()
+	while p do
+		if blocks[p:type()] then
+			depth = depth + 1
+		end
+		p = p:parent()
+	end
+	return depth
+end
+
+local function render_keywords(bufnr, parser, top, bot)
+	local lang = parser:lang()
+	local query = get_kw_query(lang)
+	if not query then
+		return
+	end
+
+	local cfg = M.config.keyword_langs[lang]
+	local blocks = cfg.blocks
+
+	local ok_t, trees = pcall(function()
+		return parser:parse()
+	end)
+	if not ok_t or not trees or not trees[1] then
+		return
+	end
+
+	local root = trees[1]:root()
+	local marks = {}
+
+	for _, node in query:iter_captures(root, bufnr, top, bot) do
+		local sr, sc = node:start()
+		local er, ec = node:end_()
+		if sr >= top and sr < bot then
+			local d = kw_depth(node, blocks)
+			-- depth 0 = top-level, still colour it (as depth 1 so it's not invisible)
+			marks[#marks + 1] = { sr, sc, er, ec, hl(math.max(1, d)) }
+		end
+	end
+
+	api.nvim_buf_clear_namespace(bufnr, ns_kw, top, bot)
+	for _, m in ipairs(marks) do
+		pcall(api.nvim_buf_set_extmark, bufnr, ns_kw, m[1], m[2], {
+			end_row = m[3],
+			end_col = m[4],
+			hl_group = m[5],
+			priority = 190, -- just below bracket priority so brackets win on overlap
+			strict = false,
+		})
+	end
+end
+
 -- Node types that count as "string-like" containers.
 -- Brackets inside any of these are skipped.
 local STRING_CONTAINERS = {
@@ -275,44 +391,14 @@ local STRING_CONTAINERS = {
 	line_comment = true,
 	block_comment = true,
 	doc_comment = true,
-	String = true,
-	String_content = true,
-	Template_string = true,
-	Raw_string = true,
-	Interpreted_string_literal = true, -- Go
-	Char_literal = true,
-	Comment = true,
-	Line_comment = true,
-	Block_comment = true,
-	Doc_comment = true,
-	STRING = true,
-	STRING_CONTENT = true,
-	TEMPLATE_STRING = true,
-	RAW_STRING = true,
-	INTERPRETED_STRING_LITERAL = true, -- Go
-	CHAR_LITERAL = true,
-	COMMENT = true,
-	LINE_COMMENT = true,
-	BLOCK_COMMENT = true,
-	DOC_COMMENT = true,
-	String_Content = true,
-	Template_String = true,
-	Raw_String = true,
-	Interpreted_String_Literal = true, -- Go
-	Char_Literal = true,
-	Line_Comment = true,
-	Block_Comment = true,
-	Doc_Comment = true,
 }
 
 -- Walk up the ancestor chain; return true if the node lives inside a string
 -- or comment. Stops at the root so it's O(depth) — typically 5–15 hops.
-
 local function in_string(node)
 	local p = node:parent()
 	while p do
-		local node_type = p:type():lower()
-		if STRING_CONTAINERS[node_type] then
+		if STRING_CONTAINERS[p:type()] then
 			return true
 		end
 		p = p:parent()
@@ -415,6 +501,12 @@ local function render(winid, bufnr)
 	if not ok or not used_ts then
 		pcall(render_raw, bufnr, top, bot)
 	end
+
+	-- Keyword highlighting (only possible with TS).
+	local ok_p, parser = pcall(vim.treesitter.get_parser, bufnr)
+	if ok_p and parser then
+		pcall(render_keywords, bufnr, parser, top, bot)
+	end
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -457,6 +549,7 @@ function M.clear()
 	for _, b in ipairs(api.nvim_list_bufs()) do
 		if api.nvim_buf_is_valid(b) then
 			api.nvim_buf_clear_namespace(b, ns, 0, -1)
+			api.nvim_buf_clear_namespace(b, ns_kw, 0, -1)
 		end
 	end
 end
